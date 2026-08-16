@@ -1,0 +1,77 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider = "prisma-client-js"
+  //output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id           String   @id @default(cuid())
+  authUserId String?    @unique
+  name         String
+  email        String   @unique
+  phone        String?
+  passwordHash String
+  role         String   @default("OWNER")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  vehicles     Vehicle[]
+}
+
+model Vehicle {
+  id          String   @id @default(cuid())
+  ownerId     String
+  registrationNumber String @unique
+  make        String?
+  model       String?
+  color       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  owner       User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  qrCode      QRCode?
+  alerts      Alert[]
+}
+
+model QRCode {
+  id        String   @id @default(cuid())
+  vehicleId String   @unique
+  token     String   @unique
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  vehicle   Vehicle  @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+}
+
+model Alert {
+  id          String   @id @default(cuid())
+  vehicleId   String
+  type        String
+  message     String?
+  scannerName String?
+  status      String   @default("PENDING")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  vehicle     Vehicle  @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  response    AlertResponse?
+}
+
+model AlertResponse {
+  id        String   @id @default(cuid())
+  alertId   String   @unique
+  message   String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  alert     Alert    @relation(fields: [alertId], references: [id], onDelete: Cascade)
+}
