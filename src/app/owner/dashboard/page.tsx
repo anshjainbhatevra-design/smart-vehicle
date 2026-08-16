@@ -153,9 +153,23 @@ export default function OwnerDashboard() {
       return;
     }
 
-    const alertsResponse = await fetch(
-      `/api/owner/alerts?ownerId=${ownerId}`
-    );
+    const {
+  data: { session },
+} = await supabase.auth.getSession();
+
+if (!session) {
+  window.location.href = "/login";
+  return;
+}
+
+const alertsResponse = await fetch(
+  `/api/owner/alerts?ownerId=${ownerId}`,
+  {
+    headers: {
+      Authorization: `Bearer ${session.access_token}`,
+    },
+  }
+);
 
     const alertsData = await alertsResponse.json();
 

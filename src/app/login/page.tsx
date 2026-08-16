@@ -70,7 +70,7 @@ export default function LoginPage() {
         email: email.trim().toLowerCase(),
         options: {
           shouldCreateUser: true,
-          emailRedirectTo: `${window.location.origin}/login`,
+          emailRedirectTo: "https://smart-vehicle-azure.vercel.app/login",
         },
       });
 

@@ -86,13 +86,16 @@ export async function POST(request: NextRequest) {
         role: updatedUser.role,
       },
     });
-  } catch (error) {
-    console.error("Auth sync error:", error);
+    } catch (error) {
+    console.error("AUTH SYNC ERROR:", error);
 
     return NextResponse.json(
       {
         success: false,
-        message: "Unable to link authentication",
+        message:
+          error instanceof Error
+            ? error.message
+            : "Unable to link authentication",
       },
       { status: 500 }
     );
