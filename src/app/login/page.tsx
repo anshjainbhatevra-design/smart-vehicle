@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase";
 
 export default function LoginPage() {
@@ -9,46 +9,114 @@ export default function LoginPage() {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
 
+  // Prevent syncUser from running twice
+  const syncingRef = useRef(false);
+
   async function syncUser(accessToken: string) {
-    const response = await fetch("/api/auth/sync", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-      },
-    });
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      throw new Error(data.message || "Unable to connect your account.");
+    if (syncingRef.current) {
+      return;
     }
 
-    window.location.href = "/owner/dashboard";
+    syncingRef.current = true;
+
+    try {
+      const response = await fetch("/api/auth/sync", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+      });
+
+      const text = await response.text();
+
+      console.log("AUTH SYNC STATUS:", response.status);
+      console.log("AUTH SYNC RESPONSE:", text);
+
+      let data;
+
+      try {
+        data = JSON.parse(text);
+      } catch {
+        throw new Error(
+          `Authentication sync returned an invalid response.`
+        );
+      }
+
+      if (!response.ok) {
+        throw new Error(
+          data.message || "Unable to connect your account."
+        );
+      }
+
+      console.log("AUTHENTICATION LINKED SUCCESSFULLY");
+
+      window.location.href = "/owner/dashboard";
+    } catch (error) {
+      syncingRef.current = false;
+
+      console.error("AUTH SYNC ERROR:", error);
+
+      throw error;
+    }
   }
 
   useEffect(() => {
-    async function checkSession() {
+    let mounted = true;
+
+    async function handleExistingSession() {
       const {
         data: { session },
       } = await supabase.auth.getSession();
 
-      if (!session) {
+      if (!mounted || !session) {
         return;
       }
 
       try {
         await syncUser(session.access_token);
       } catch (error) {
-        console.error(error);
-        setError(
-          error instanceof Error
-            ? error.message
-            : "Unable to connect your account."
-        );
+        if (mounted) {
+          setError(
+            error instanceof Error
+              ? error.message
+              : "Unable to connect your account."
+          );
+        }
       }
     }
 
-    checkSession();
+    handleExistingSession();
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange(
+      async (event, session) => {
+        console.log("SUPABASE AUTH EVENT:", event);
+
+        if (!mounted || !session) {
+          return;
+        }
+
+        if (event === "SIGNED_IN") {
+          try {
+            await syncUser(session.access_token);
+          } catch (error) {
+            if (mounted) {
+              setError(
+                error instanceof Error
+                  ? error.message
+                  : "Unable to connect your account."
+              );
+            }
+          }
+        }
+      }
+    );
+
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
   }, []);
 
   async function sendMagicLink(
@@ -66,15 +134,21 @@ export default function LoginPage() {
     setMessage("");
 
     try {
+      const redirectUrl = `${window.location.origin}/login`;
+
+      console.log("MAGIC LINK REDIRECT:", redirectUrl);
+
       const { error } = await supabase.auth.signInWithOtp({
         email: email.trim().toLowerCase(),
+
         options: {
           shouldCreateUser: true,
-          emailRedirectTo: "https://smart-vehicle-azure.vercel.app/login",
+          emailRedirectTo: redirectUrl,
         },
       });
 
       if (error) {
+        console.error("MAGIC LINK ERROR:", error);
         setError(error.message);
         return;
       }
@@ -83,8 +157,13 @@ export default function LoginPage() {
         "Magic link sent. Check your email and click the link to continue."
       );
     } catch (error) {
-      console.error(error);
-      setError("Unable to send magic link.");
+      console.error("MAGIC LINK ERROR:", error);
+
+      setError(
+        error instanceof Error
+          ? error.message
+          : "Unable to send magic link."
+      );
     } finally {
       setLoading(false);
     }

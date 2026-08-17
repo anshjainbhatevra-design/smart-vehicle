@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { prisma } from "@/lib/prisma";
+import crypto from "crypto";
 
 export async function POST(request: NextRequest) {
   try {
@@ -20,7 +21,7 @@ export async function POST(request: NextRequest) {
 
     const supabase = createClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
     );
 
     const {
@@ -50,43 +51,98 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    /*
+     * Check whether this Supabase user is already linked
+     * to a Smart Vehicle account.
+     */
+    const linkedUser = await prisma.user.findUnique({
+      where: {
+        authUserId: user.id,
+      },
+    });
+
+    if (linkedUser) {
+      return NextResponse.json({
+        success: true,
+        message: "Authentication linked successfully",
+        user: {
+          id: linkedUser.id,
+          name: linkedUser.name,
+          email: linkedUser.email,
+          role: linkedUser.role,
+        },
+      });
+    }
+
+    /*
+     * Check whether a Smart Vehicle account already exists
+     * for this email.
+     */
     const existingUser = await prisma.user.findUnique({
       where: {
         email,
       },
     });
 
-    if (!existingUser) {
-      return NextResponse.json(
-        {
-          success: false,
-          message:
-            "No Smart Vehicle account exists for this email address",
+    /*
+     * Existing Smart Vehicle user:
+     * link the Supabase Auth user to it.
+     */
+    if (existingUser) {
+      const updatedUser = await prisma.user.update({
+        where: {
+          id: existingUser.id,
         },
-        { status: 404 }
-      );
+        data: {
+          authUserId: user.id,
+        },
+      });
+
+      return NextResponse.json({
+        success: true,
+        message: "Authentication linked successfully",
+        user: {
+          id: updatedUser.id,
+          name: updatedUser.name,
+          email: updatedUser.email,
+          role: updatedUser.role,
+        },
+      });
     }
 
-    const updatedUser = await prisma.user.update({
-      where: {
-        id: existingUser.id,
-      },
+    /*
+     * New email:
+     * automatically create a Smart Vehicle account.
+     *
+     * Magic-link authentication is handled by Supabase,
+     * so passwordHash is only a placeholder required by
+     * the current Prisma schema.
+     */
+    const newUser = await prisma.user.create({
       data: {
         authUserId: user.id,
+        email,
+        name:
+          user.user_metadata?.full_name ||
+          user.user_metadata?.name ||
+          email.split("@")[0],
+        phone: user.user_metadata?.phone || null,
+        passwordHash: `MAGIC_LINK_ONLY_${crypto.randomUUID()}`,
+        role: "OWNER",
       },
     });
 
     return NextResponse.json({
       success: true,
-      message: "Authentication linked successfully",
+      message: "Smart Vehicle account created successfully",
       user: {
-        id: updatedUser.id,
-        name: updatedUser.name,
-        email: updatedUser.email,
-        role: updatedUser.role,
+        id: newUser.id,
+        name: newUser.name,
+        email: newUser.email,
+        role: newUser.role,
       },
     });
-    } catch (error) {
+  } catch (error) {
     console.error("AUTH SYNC ERROR:", error);
 
     return NextResponse.json(

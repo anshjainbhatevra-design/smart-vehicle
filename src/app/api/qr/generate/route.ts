@@ -23,7 +23,7 @@ export async function POST(request: NextRequest) {
     // 2. Verify Supabase user
     const supabase = createClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
     );
 
     const {

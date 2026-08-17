@@ -20,7 +20,7 @@ export async function GET(request: NextRequest) {
 
     const supabase = createClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
     );
 
     const {
@@ -38,7 +38,20 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const prismaUser = await prisma.user.findUnique({
+    const email = user.email?.trim().toLowerCase();
+
+    if (!email) {
+      return NextResponse.json(
+        {
+          success: false,
+          message: "Authenticated user does not have an email",
+        },
+        { status: 400 }
+      );
+    }
+
+    // First try to find the user using Supabase Auth ID
+    let prismaUser = await prisma.user.findUnique({
       where: {
         authUserId: user.id,
       },
@@ -47,17 +60,51 @@ export async function GET(request: NextRequest) {
         name: true,
         email: true,
         role: true,
+        authUserId: true,
       },
     });
 
+    // If authUserId is not linked yet, find the Smart Vehicle
+    // account using the authenticated email and link it.
     if (!prismaUser) {
-      return NextResponse.json(
-        {
-          success: false,
-          message: "Your account is not linked to Smart Vehicle",
+      const existingUser = await prisma.user.findUnique({
+        where: {
+          email,
         },
-        { status: 404 }
-      );
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          role: true,
+          authUserId: true,
+        },
+      });
+
+      if (!existingUser) {
+        return NextResponse.json(
+          {
+            success: false,
+            message: "No Smart Vehicle account exists for this email address",
+          },
+          { status: 404 }
+        );
+      }
+
+      prismaUser = await prisma.user.update({
+        where: {
+          id: existingUser.id,
+        },
+        data: {
+          authUserId: user.id,
+        },
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          role: true,
+          authUserId: true,
+        },
+      });
     }
 
     return NextResponse.json({

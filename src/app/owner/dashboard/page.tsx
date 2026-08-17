@@ -135,10 +135,23 @@ export default function OwnerDashboard() {
   setError("");
 
   try {
+    // Get the current Supabase authentication session
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+
+    // If session is missing, send user back to login
+    if (!session) {
+      window.location.href = "/login";
+      return;
+    }
+
+    // Send response with authentication token
     const response = await fetch("/api/alerts/respond", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        Authorization: `Bearer ${session.access_token}`,
       },
       body: JSON.stringify({
         alertId,
@@ -153,23 +166,15 @@ export default function OwnerDashboard() {
       return;
     }
 
-    const {
-  data: { session },
-} = await supabase.auth.getSession();
-
-if (!session) {
-  window.location.href = "/login";
-  return;
-}
-
-const alertsResponse = await fetch(
-  `/api/owner/alerts?ownerId=${ownerId}`,
-  {
-    headers: {
-      Authorization: `Bearer ${session.access_token}`,
-    },
-  }
-);
+    // Refresh alerts after successful response
+    const alertsResponse = await fetch(
+      `/api/owner/alerts?ownerId=${ownerId}`,
+      {
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+        },
+      }
+    );
 
     const alertsData = await alertsResponse.json();
 
