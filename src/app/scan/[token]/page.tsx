@@ -54,6 +54,12 @@ export default function ScanPage({ params }: PageProps) {
 
   const [token, setToken] = useState("");
 
+  // Alert response states
+  const [alertId, setAlertId] = useState<string | null>(null);
+  const [ownerResponse, setOwnerResponse] = useState<string | null>(null);
+  const [checkingResponse, setCheckingResponse] = useState(false);
+  const [responseError, setResponseError] = useState<string | null>(null);
+
   useEffect(() => {
     params.then(async ({ token: routeToken }) => {
       setToken(routeToken);
@@ -72,6 +78,58 @@ export default function ScanPage({ params }: PageProps) {
       }
     });
   }, [params]);
+
+  // Automatic response checking every 5 seconds after alert is sent
+  useEffect(() => {
+    if (!alertId || ownerResponse) return;
+
+    const intervalId = setInterval(async () => {
+      try {
+        const response = await fetch(`/api/alerts/${alertId}/response`);
+        const data = await response.json();
+
+        if (data.success && data.responded) {
+          setOwnerResponse(data.response.message);
+          clearInterval(intervalId);
+        }
+      } catch (error) {
+        console.error("Auto check response error:", error);
+      }
+    }, 5000);
+
+    return () => clearInterval(intervalId);
+  }, [alertId, ownerResponse]);
+
+  async function handleCheckResponse() {
+    if (!alertId) return;
+    setCheckingResponse(true);
+    setResponseError(null);
+
+    try {
+      const response = await fetch(`/api/alerts/${alertId}/response`);
+      const data = await response.json();
+
+      if (!response.ok) {
+        setResponseError(data.message || "Unable to check response. Please try again.");
+        return;
+      }
+
+      if (data.success) {
+        if (data.responded) {
+          setOwnerResponse(data.response.message);
+        } else {
+          setResponseError("The owner has not responded yet.");
+        }
+      } else {
+        setResponseError("Unable to check response. Please try again.");
+      }
+    } catch (error) {
+      console.error("Manual check response error:", error);
+      setResponseError("Unable to check response. Please try again.");
+    } finally {
+      setCheckingResponse(false);
+    }
+  }
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -106,6 +164,9 @@ export default function ScanPage({ params }: PageProps) {
       }
 
       setResult("Alert sent successfully. The vehicle owner has been notified.");
+      setAlertId(data.alert.id);
+      setOwnerResponse(null);
+      setResponseError(null);
       setSelectedType("");
       setMessage("");
       setScannerName("");
@@ -261,6 +322,48 @@ export default function ScanPage({ params }: PageProps) {
               {sending ? "Sending Alert..." : "Send Alert"}
             </button>
           </form>
+
+          {alertId && (
+            <div className="mt-6 border-t border-gray-100 pt-6">
+              <h3 className="text-sm font-semibold text-gray-900 mb-3">
+                Owner Response
+              </h3>
+              
+              {ownerResponse ? (
+                <div className="rounded-xl bg-green-50 p-4 border border-green-100">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-green-700 mb-1">
+                    ✅ Response Received
+                  </p>
+                  <p className="text-sm font-medium text-green-900">
+                    "{ownerResponse}"
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2 text-sm text-gray-600">
+                    <span className="relative flex h-2 w-2">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-500"></span>
+                    </span>
+                    <span>Waiting for owner response...</span>
+                  </div>
+
+                  {responseError && (
+                    <p className="text-xs text-red-600">{responseError}</p>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={handleCheckResponse}
+                    disabled={checkingResponse}
+                    className="w-full rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-xs font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-60 transition"
+                  >
+                    {checkingResponse ? "Checking..." : "🔍 Check Owner Response"}
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
         </section>
 
         <p className="mt-5 text-center text-xs text-gray-500">

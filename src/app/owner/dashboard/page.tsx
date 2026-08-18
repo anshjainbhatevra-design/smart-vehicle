@@ -31,6 +31,33 @@ export default function OwnerDashboard() {
   const [sendingResponse, setSendingResponse] = useState(false);
   const [ownerId, setOwnerId] = useState<string | null>(null);
 
+  // Push notification state
+  const [notifPermission, setNotifPermission] = useState<NotificationPermission | "">("");
+  const [notifMsg, setNotifMsg] = useState("");
+  const [enablingNotif, setEnablingNotif] = useState(false);
+  const [hasSubscription, setHasSubscription] = useState(false);
+  const [disablingNotif, setDisablingNotif] = useState(false);
+
+  useEffect(() => {
+    async function checkSubscription() {
+      if (
+        typeof window !== "undefined" &&
+        "serviceWorker" in navigator &&
+        "PushManager" in window &&
+        Notification.permission === "granted"
+      ) {
+        try {
+          const registration = await navigator.serviceWorker.ready;
+          const subscription = await registration.pushManager.getSubscription();
+          setHasSubscription(!!subscription);
+        } catch (err) {
+          console.error("Error checking push subscription status:", err);
+        }
+      }
+    }
+    checkSubscription();
+  }, []);
+
   useEffect(() => {
     async function loadOwner() {
       try {
@@ -39,9 +66,9 @@ export default function OwnerDashboard() {
         } = await supabase.auth.getSession();
 
         if (!session) {
-  window.location.href = "/login";
-  return;
-}
+          window.location.href = "/login";
+          return;
+        }
 
         const response = await fetch("/api/auth/me", {
           headers: {
@@ -58,6 +85,11 @@ export default function OwnerDashboard() {
         }
 
         setOwnerId(data.user.id);
+
+        // Initialise push permission state from browser
+        if (typeof window !== "undefined" && "Notification" in window) {
+          setNotifPermission(Notification.permission);
+        }
       } catch (error) {
         console.error("Auth error:", error);
         setError("Unable to identify current user.");
@@ -67,6 +99,161 @@ export default function OwnerDashboard() {
 
     loadOwner();
   }, []);
+
+  // ── Push registration ─────────────────────────────────────────
+  // Converts a VAPID public key from URL-safe base64 to a Uint8Array.
+  function urlBase64ToUint8Array(base64String: string): Uint8Array {
+    const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+    const base64 = (base64String + padding)
+      .replace(/-/g, "+")
+      .replace(/_/g, "/");
+    const rawData = window.atob(base64);
+    const outputArray = new Uint8Array(rawData.length);
+    for (let i = 0; i < rawData.length; ++i) {
+      outputArray[i] = rawData.charCodeAt(i);
+    }
+    return outputArray;
+  }
+
+  // Registers the service worker, waits for it to become active, subscribes
+  // to PushManager, and POSTs the subscription to the server.
+  // Throws on any failure so the caller can show a proper error.
+  async function registerPush(session: { access_token: string }) {
+    if (
+      typeof window === "undefined" ||
+      !("serviceWorker" in navigator) ||
+      !("PushManager" in window)
+    ) {
+      return;
+    }
+
+    const vapidKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
+    if (!vapidKey) {
+      throw new Error("NEXT_PUBLIC_VAPID_PUBLIC_KEY is not set");
+    }
+
+    // Step 1: Register the SW (idempotent — safe to call even if already registered).
+    await navigator.serviceWorker.register("/sw.js");
+
+    // Step 2: Wait until an active service worker controls the page.
+    // navigator.serviceWorker.ready resolves ONLY when a worker is active.
+    // This is the only correct moment to call pushManager.subscribe().
+    const registration = await navigator.serviceWorker.ready;
+
+    const existing = await registration.pushManager.getSubscription();
+    const subscription =
+      existing ??
+      (await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(vapidKey).buffer as ArrayBuffer,
+      }));
+
+    // Step 3: Persist / refresh the subscription on the server.
+    const res = await fetch("/api/push/subscribe", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${session.access_token}`,
+      },
+      body: JSON.stringify(subscription.toJSON()),
+    });
+
+    if (!res.ok) {
+      throw new Error("Failed to save push subscription on server");
+    }
+
+    setHasSubscription(true);
+  }
+
+  // Called when the owner clicks the "Enable Notifications" button.
+  async function handleEnableNotifications() {
+    if (enablingNotif) return;
+    setEnablingNotif(true);
+    setNotifMsg("");
+
+    try {
+      const permission = await Notification.requestPermission();
+      setNotifPermission(permission);
+
+      if (permission === "granted") {
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+
+        if (session) {
+          // registerPush throws on any failure — only show success if it resolves.
+          await registerPush(session);
+          setNotifMsg("Notifications enabled.");
+        } else {
+          setNotifMsg("Session expired. Please log in again.");
+        }
+      } else {
+        setNotifMsg(
+          "Notifications are blocked. Please enable them in your browser settings."
+        );
+      }
+    } catch (err) {
+      console.error("Enable notifications error:", err);
+      setNotifMsg("Could not enable notifications. Please try again.");
+    } finally {
+      setEnablingNotif(false);
+    }
+  }
+
+  // Called when the owner clicks the "Disable Notifications" button.
+  async function handleDisableNotifications() {
+    if (disablingNotif) return;
+    setDisablingNotif(true);
+    setNotifMsg("");
+
+    try {
+      if (
+        typeof window === "undefined" ||
+        !("serviceWorker" in navigator) ||
+        !("PushManager" in window)
+      ) {
+        throw new Error("Push notifications are not supported on this browser.");
+      }
+
+      const registration = await navigator.serviceWorker.ready;
+      const subscription = await registration.pushManager.getSubscription();
+
+      if (subscription) {
+        // Step 1: Remove from the server database first
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+
+        if (session) {
+          const res = await fetch("/api/push/unsubscribe", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${session.access_token}`,
+            },
+            body: JSON.stringify({ endpoint: subscription.endpoint }),
+          });
+
+          if (!res.ok) {
+            const data = await res.json();
+            throw new Error(data.message || "Failed to remove subscription from database.");
+          }
+        }
+
+        // Step 2: Unsubscribe on the browser
+        await subscription.unsubscribe();
+      }
+
+      setHasSubscription(false);
+      setNotifMsg("Notifications disabled.");
+    } catch (err: any) {
+      console.error("Disable notifications error:", err);
+      setNotifMsg(err.message || "Could not disable notifications. Please try again.");
+    } finally {
+      setDisablingNotif(false);
+    }
+  }
+  // ───────────────────────────────────────────────────────────────────────
 
   useEffect(() => {
     async function loadAlerts() {
@@ -99,6 +286,15 @@ export default function OwnerDashboard() {
         }
 
         setAlerts(data.alerts);
+
+        // Auto-subscribe silently if the owner has already granted permission
+        if (
+          typeof window !== "undefined" &&
+          "Notification" in window &&
+          Notification.permission === "granted"
+        ) {
+          void registerPush(session);
+        }
       } catch (error) {
         console.error("Dashboard error:", error);
         setError("Unable to connect to the server.");
@@ -243,6 +439,62 @@ export default function OwnerDashboard() {
     Logout
   </button>
 </div>
+
+        {/* Notification permission status / actions */}
+        {notifMsg && (!hasSubscription || notifMsg !== "Notifications enabled.") && (
+          <div className={`mb-5 rounded-xl px-4 py-3 text-sm ${
+            notifMsg.toLowerCase().includes("error") || 
+            notifMsg.toLowerCase().includes("fail") || 
+            notifMsg.toLowerCase().includes("block") ||
+            notifMsg.toLowerCase().includes("expired")
+              ? "bg-red-50 text-red-700"
+              : notifMsg.toLowerCase().includes("disable")
+                ? "bg-blue-50 text-blue-700"
+                : "bg-green-50 text-green-700"
+          }`}>
+            <p>{notifMsg}</p>
+          </div>
+        )}
+
+        {((notifPermission === "default") || (notifPermission === "granted" && !hasSubscription)) && (
+          <div className="mb-5 flex items-center justify-between rounded-xl bg-blue-50 px-4 py-3">
+            <p className="text-sm text-blue-700">
+              Enable notifications to receive instant alerts when someone scans your vehicle.
+            </p>
+            <button
+              type="button"
+              onClick={handleEnableNotifications}
+              disabled={enablingNotif}
+              className="ml-4 shrink-0 rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-60"
+            >
+              {enablingNotif ? "Enabling…" : "🔔 Enable Notifications"}
+            </button>
+          </div>
+        )}
+
+        {notifPermission === "denied" && (
+          <div className="mb-5 rounded-xl bg-yellow-50 px-4 py-3">
+            <p className="text-sm text-yellow-800">
+              🔕 Notifications are blocked in your browser. To receive alerts, enable notifications in your browser settings and reload the page.
+            </p>
+          </div>
+        )}
+
+        {notifPermission === "granted" && hasSubscription && (
+          <div className="mb-5 flex items-center justify-between rounded-xl bg-green-50 px-4 py-3">
+            <p className="text-sm text-green-700">
+              ✓ Notifications enabled.
+            </p>
+            <button
+              type="button"
+              onClick={handleDisableNotifications}
+              disabled={disablingNotif}
+              className="ml-4 shrink-0 rounded-xl border border-red-200 bg-white px-4 py-2 text-sm font-semibold text-red-600 hover:bg-red-50 disabled:opacity-60"
+            >
+              {disablingNotif ? "Disabling…" : "Disable Notifications"}
+            </button>
+          </div>
+        )}
 
         {error && (
           <div className="mb-5 rounded-xl bg-red-50 p-4 text-sm text-red-700">
