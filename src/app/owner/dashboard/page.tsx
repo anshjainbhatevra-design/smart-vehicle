@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 
 type Alert = {
@@ -23,6 +24,7 @@ type Alert = {
 };
 
 export default function OwnerDashboard() {
+  const router = useRouter();
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -431,13 +433,22 @@ export default function OwnerDashboard() {
     </p>
   </div>
 
-  <button
-    type="button"
-    onClick={handleLogout}
-    className="rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50"
-  >
-    Logout
-  </button>
+  <div className="flex gap-2">
+    <button
+      type="button"
+      onClick={() => router.push("/owner/vehicles")}
+      className="rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50"
+    >
+      My Vehicles
+    </button>
+    <button
+      type="button"
+      onClick={handleLogout}
+      className="rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50"
+    >
+      Logout
+    </button>
+  </div>
 </div>
 
         {/* Notification permission status / actions */}
